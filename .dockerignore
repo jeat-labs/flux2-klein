@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+.dockerignore
+.env
+CHANGELOG.md
+LICENSE
+tests/
+scripts/
+__pycache__
+*.pyc
