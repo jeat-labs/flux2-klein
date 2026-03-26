@@ -97,6 +97,8 @@ DEFAULT_PROMPT = "Fill the green spaces according to the image"
 
 
 def _inpaint(job_input):
+    t0 = time.perf_counter()
+
     image = _decode_image(job_input)
     if image is None:
         return {"error": "Provide image_base64 or image_url"}
@@ -108,6 +110,8 @@ def _inpaint(job_input):
         io.BytesIO(base64.b64decode(job_input["mask_base64"]))
     ).convert("L")
 
+    t1 = time.perf_counter()
+
     green_image = _apply_green_mask(image, mask)
 
     prompt = job_input.get("prompt", DEFAULT_PROMPT)
@@ -117,7 +121,7 @@ def _inpaint(job_input):
 
     generator = torch.Generator(device="cuda").manual_seed(seed)
 
-    t0 = time.perf_counter()
+    t2 = time.perf_counter()
     with torch.no_grad():
         result = PIPE(
             prompt=prompt,
@@ -128,13 +132,22 @@ def _inpaint(job_input):
             num_inference_steps=steps,
             generator=generator,
         ).images[0]
-    t1 = time.perf_counter()
+    t3 = time.perf_counter()
+
+    encoded = _encode_image(result)
+    t4 = time.perf_counter()
 
     return {
-        "image_base64": _encode_image(result),
+        "image_base64": encoded,
         "width": result.width,
         "height": result.height,
-        "timings": {"total_ms": round((t1 - t0) * 1000, 1)},
+        "timings": {
+            "download_ms": round((t1 - t0) * 1000, 1),
+            "preprocess_ms": round((t2 - t1) * 1000, 1),
+            "inference_ms": round((t3 - t2) * 1000, 1),
+            "postprocess_ms": round((t4 - t3) * 1000, 1),
+            "total_ms": round((t4 - t0) * 1000, 1),
+        },
     }
 
 
@@ -144,9 +157,13 @@ def _inpaint(job_input):
 
 
 def _outpaint(job_input):
+    t0 = time.perf_counter()
+
     image = _decode_image(job_input)
     if image is None:
         return {"error": "Provide image_base64 or image_url"}
+
+    t1 = time.perf_counter()
 
     orig_w, orig_h = image.size
 
@@ -182,7 +199,7 @@ def _outpaint(job_input):
 
     generator = torch.Generator(device="cuda").manual_seed(seed)
 
-    t0 = time.perf_counter()
+    t2 = time.perf_counter()
     with torch.no_grad():
         result = PIPE(
             prompt=prompt,
@@ -193,15 +210,24 @@ def _outpaint(job_input):
             num_inference_steps=steps,
             generator=generator,
         ).images[0]
-    t1 = time.perf_counter()
+    t3 = time.perf_counter()
+
+    encoded = _encode_image(result)
+    t4 = time.perf_counter()
 
     return {
-        "image_base64": _encode_image(result),
+        "image_base64": encoded,
         "original_width": orig_w,
         "original_height": orig_h,
         "width": result.width,
         "height": result.height,
-        "timings": {"total_ms": round((t1 - t0) * 1000, 1)},
+        "timings": {
+            "download_ms": round((t1 - t0) * 1000, 1),
+            "preprocess_ms": round((t2 - t1) * 1000, 1),
+            "inference_ms": round((t3 - t2) * 1000, 1),
+            "postprocess_ms": round((t4 - t3) * 1000, 1),
+            "total_ms": round((t4 - t0) * 1000, 1),
+        },
     }
 
 
@@ -222,9 +248,13 @@ STANDARD_CROPS = {
 
 def _multi_crop(job_input):
     """Generate one big square outpaint and return crops in multiple aspect ratios."""
+    t0 = time.perf_counter()
+
     image = _decode_image(job_input)
     if image is None:
         return {"error": "Provide image_base64 or image_url"}
+
+    t1 = time.perf_counter()
 
     orig_w, orig_h = image.size
     scale = job_input.get("scale", 1.8)
@@ -241,9 +271,7 @@ def _multi_crop(job_input):
     canvas = Image.new("RGB", (side, side), (0, 255, 0))
     canvas.paste(image, (px, py))
 
-    generator = torch.Generator(device="cuda").manual_seed(seed)
-
-    t0 = time.perf_counter()
+    t2 = time.perf_counter()
     with torch.no_grad():
         big_square = PIPE(
             prompt=prompt,
@@ -252,9 +280,9 @@ def _multi_crop(job_input):
             width=side,
             guidance_scale=guidance,
             num_inference_steps=steps,
-            generator=generator,
+            generator=torch.Generator(device="cuda").manual_seed(seed),
         ).images[0]
-    t1 = time.perf_counter()
+    t3 = time.perf_counter()
 
     cw, ch = big_square.size
     crops = {}
@@ -272,14 +300,23 @@ def _multi_crop(job_input):
         cropped = big_square.crop((left, top, left + crop_w, top + crop_h))
         crops[ratio_name] = _encode_image(cropped)
 
+    big_square_b64 = _encode_image(big_square)
+    t4 = time.perf_counter()
+
     return {
-        "big_square": _encode_image(big_square),
+        "big_square": big_square_b64,
         "big_square_size": side,
         "crops": crops,
         "ratios_generated": list(crops.keys()),
         "original_width": orig_w,
         "original_height": orig_h,
-        "timings": {"total_ms": round((t1 - t0) * 1000, 1)},
+        "timings": {
+            "download_ms": round((t1 - t0) * 1000, 1),
+            "preprocess_ms": round((t2 - t1) * 1000, 1),
+            "inference_ms": round((t3 - t2) * 1000, 1),
+            "postprocess_ms": round((t4 - t3) * 1000, 1),
+            "total_ms": round((t4 - t0) * 1000, 1),
+        },
     }
 
 
